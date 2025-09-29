@@ -11,10 +11,37 @@ require = createRequire(__filename)
 ${createCommonBinding(localName, pkgName, packageVersion)}
 module.exports = nativeBinding
 ${idents
-  .map((ident) => `module.exports.${ident} = nativeBinding.${ident}`)
-  .join('\n')}
+      .map((ident) => `module.exports.${ident} = nativeBinding.${ident}`)
+      .join('\n')}
 `
 }
+
+export function createCjsBindingModule(
+  namespace: string,
+  indexPackageName: string,
+  idents: string[],
+): string {
+  return `${bindingHeader}
+const { createRequire } = require('node:module')
+require = createRequire(__filename)
+
+const nativeBinding = require('./${indexPackageName}')
+module.exports = nativeBinding.${namespace}
+${idents
+      .map((ident) => `module.exports.${ident} = nativeBinding.${namespace}.${ident}`)
+      .join('\n')}
+`
+}
+
+export function createEsmBindingModule(
+  namespace: string,
+  indexPackageName: string,
+  idents: string[],
+): string {
+  return `${bindingHeader}
+`
+}
+
 
 export function createEsmBinding(
   localName: string,

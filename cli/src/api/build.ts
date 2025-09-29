@@ -32,9 +32,11 @@ import {
   dirExistsAsync,
   readdirAsync,
   CargoWorkspaceMetadata,
+  processTypeDefModules,
+  TOP_LEVEL_NAMESPACE,
 } from '../utils/index.js'
 
-import { createCjsBinding, createEsmBinding } from './templates/index.js'
+import { createCjsBinding, createCjsBindingModule, createEsmBinding, createEsmBindingModule } from './templates/index.js'
 import {
   createWasiBinding,
   createWasiBrowserBinding,
@@ -43,6 +45,7 @@ import {
   createWasiBrowserWorkerBinding,
   WASI_WORKER_TEMPLATE,
 } from './templates/wasi-worker-template.js'
+import { bool } from '@emnapi/runtime'
 
 const debug = debugFactory('build')
 const require = createRequire(import.meta.url)
@@ -326,7 +329,7 @@ class Builder {
         const output = data.toString()
         console.error(output)
         if (/Finished\s(`dev`|`release`)/.test(output)) {
-          this.postBuild().catch(() => {})
+          this.postBuild().catch(() => { })
         }
       })
     })
@@ -747,17 +750,28 @@ class Builder {
 
     // only for cdylib
     if (this.cdyLibName) {
-      const idents = await this.generateTypeDef()
-      const jsOutput = await this.writeJsBinding(idents)
-      const wasmBindingsOutput = await this.writeWasiBinding(
-        wasmBinaryName,
-        idents,
-      )
-      if (jsOutput) {
-        this.outputs.push(jsOutput)
-      }
-      if (wasmBindingsOutput) {
-        this.outputs.push(...wasmBindingsOutput)
+      const jsBinding = this.options.jsBinding ?? 'index.js'
+      if (this.options.jsModules) {
+        const idents = await this.generateTypeDefModules()
+        for (const [namespace, { exports }] of idents) {
+          const jsOutput = await this.writeJsBinding(exports, namespace === TOP_LEVEL_NAMESPACE ? undefined : namespace)
+          if (jsOutput) {
+            this.outputs.push(jsOutput)
+          }
+        }
+      } else {
+        const idents = await this.generateTypeDef()
+        const jsOutput = await this.writeJsBinding(idents, undefined)
+        const wasmBindingsOutput = await this.writeWasiBinding(
+          wasmBinaryName,
+          idents,
+        )
+        if (jsOutput) {
+          this.outputs.push(jsOutput)
+        }
+        if (wasmBindingsOutput) {
+          this.outputs.push(...wasmBindingsOutput)
+        }
       }
     }
 
@@ -874,17 +888,8 @@ class Builder {
     return []
   }
 
-  private async generateTypeDef() {
-    const typeDefDir = this.envs.NAPI_TYPE_DEF_TMP_FOLDER
-    if (!this.enableTypeDef || !(await dirExistsAsync(typeDefDir))) {
-      return []
-    }
-
-    const dest = join(this.outputDir, this.options.dts ?? 'index.d.ts')
-
+  private async generateTypeDefFile(dest: string, dts: string) {
     let header = ''
-    let dts = ''
-    let exports: string[] = []
 
     if (!this.options.noDtsHeader) {
       const dtsHeader = this.options.dtsHeader ?? this.config.dtsHeader
@@ -906,27 +911,6 @@ class Builder {
       } else {
         header = DEFAULT_TYPE_DEF_HEADER
       }
-    }
-
-    const files = await readdirAsync(typeDefDir, { withFileTypes: true })
-
-    if (!files.length) {
-      debug('No type def files found. Skip generating dts file.')
-      return []
-    }
-
-    for (const file of files) {
-      if (!file.isFile()) {
-        continue
-      }
-
-      const { dts: fileDts, exports: fileExports } = await processTypeDef(
-        join(typeDefDir, file.name),
-        this.options.constEnum ?? this.config.constEnum ?? true,
-      )
-
-      dts += fileDts
-      exports.push(...fileExports)
     }
 
     if (dts.indexOf('ExternalObject<') > -1) {
@@ -958,10 +942,89 @@ export type TypedArray = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array
       debug.error(e as Error)
     }
 
+  }
+
+  private async generateTypeDef() {
+    const typeDefDir = this.envs.NAPI_TYPE_DEF_TMP_FOLDER
+    if (!this.enableTypeDef || !(await dirExistsAsync(typeDefDir))) {
+      return []
+    }
+
+    const dest = join(this.outputDir, this.options.dts ?? 'index.d.ts')
+
+    let dts = ''
+    let exports: string[] = []
+
+    const files = await readdirAsync(typeDefDir, { withFileTypes: true })
+
+    if (!files.length) {
+      debug('No type def files found. Skip generating dts file.')
+      return []
+    }
+
+    for (const file of files) {
+      if (!file.isFile()) {
+        continue
+      }
+
+      const { dts: fileDts, exports: fileExports } = await processTypeDef(
+        join(typeDefDir, file.name),
+        this.options.constEnum ?? this.config.constEnum ?? true,
+      )
+
+      dts += fileDts
+      exports.push(...fileExports)
+    }
+
+    await this.generateTypeDefFile(dest, dts)
     return exports
   }
 
-  private async writeJsBinding(idents: string[]) {
+  private async generateTypeDefModules() {
+    const typeDefDir = this.envs.NAPI_TYPE_DEF_TMP_FOLDER
+    if (!this.enableTypeDef || !(await dirExistsAsync(typeDefDir))) {
+      return []
+    }
+
+    const files = await readdirAsync(typeDefDir, { withFileTypes: true })
+
+    if (!files.length) {
+      debug('No type def files found. Skip generating dts file.')
+      return []
+    }
+
+    const output: Map<string, { declaration: string, exports: string[] }> = new Map()
+
+    for (const file of files) {
+      if (!file.isFile()) {
+        continue
+      }
+
+      const decls = await processTypeDefModules(
+        join(typeDefDir, file.name),
+        this.options.constEnum ?? this.config.constEnum ?? true,
+      )
+
+      for (const [namespace, { declaration, exports }] of decls) {
+        const existing = output.get(namespace)
+        if (existing) {
+          existing.declaration += declaration
+          existing.exports.push(...exports)
+        } else {
+          output.set(namespace, { declaration, exports })
+        }
+      }
+    }
+
+    for (const [namespace, { declaration, exports }] of output) {
+      const name = namespace === TOP_LEVEL_NAMESPACE ? this.options.dts ?? 'index.d.ts' : `${namespace}.d.ts`
+      await this.generateTypeDefFile(join(this.outputDir, name), declaration)
+    }
+
+    return output;
+  }
+
+  private async writeJsBinding(idents: string[], namespace: string | undefined) {
     if (
       !this.options.platform ||
       // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
@@ -971,16 +1034,30 @@ export type TypedArray = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array
       return
     }
 
-    const name = this.options.jsBinding ?? 'index.js'
+    let name: string
+    let binding: string
 
-    const createBinding = this.options.esm ? createEsmBinding : createCjsBinding
-    const binding = createBinding(
-      this.config.binaryName,
-      this.config.packageName,
-      idents,
-      // in npm preversion hook
-      process.env.npm_new_version ?? this.config.packageJson.version,
-    )
+    if (namespace === undefined) {
+      const createBinding = this.options.esm ? createEsmBinding : createCjsBinding
+
+      name = this.options.jsBinding ?? 'index.js'
+      binding = createBinding(
+        this.config.binaryName,
+        this.config.packageName,
+        idents,
+        // in npm preversion hook
+        process.env.npm_new_version ?? this.config.packageJson.version,
+      )
+    } else {
+      const createBinding = this.options.esm ? createEsmBindingModule : createCjsBindingModule
+
+      name = `${namespace.replaceAll('_', '-')}.js`
+      binding = createBinding(
+        namespace,
+        this.options.jsBinding ?? 'index.js',
+        idents,
+      )
+    }
 
     try {
       const dest = join(this.outputDir, name)
@@ -1023,8 +1100,8 @@ export type TypedArray = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array
           this.config.wasm?.initialMemory,
           this.config.wasm?.maximumMemory,
         ) +
-          exportsCode +
-          '\n',
+        exportsCode +
+        '\n',
         'utf8',
       )
       await writeFileAsync(
@@ -1037,14 +1114,14 @@ export type TypedArray = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array
           this.config.wasm?.browser?.asyncInit,
           this.config.wasm?.browser?.buffer,
         ) +
-          `export default __napiModule.exports\n` +
-          idents
-            .map(
-              (ident) =>
-                `export const ${ident} = __napiModule.exports.${ident}`,
-            )
-            .join('\n') +
-          '\n',
+        `export default __napiModule.exports\n` +
+        idents
+          .map(
+            (ident) =>
+              `export const ${ident} = __napiModule.exports.${ident}`,
+          )
+          .join('\n') +
+        '\n',
         'utf8',
       )
       await writeFileAsync(workerPath, WASI_WORKER_TEMPLATE, 'utf8')

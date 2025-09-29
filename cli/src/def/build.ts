@@ -65,6 +65,10 @@ export abstract class BaseBuildCommand extends Command {
       'Whether to disable the generation JS binding file. Only works with `--platform` flag.',
   })
 
+  jsModules?: boolean = Option.Boolean('--js-modules', {
+    description: 'Whether to generate JS binding file for each module.',
+  })
+
   dts?: string = Option.String('--dts', {
     description:
       'Path and filename of generated type def file. Relative to `--output-dir`',
@@ -159,6 +163,7 @@ export abstract class BaseBuildCommand extends Command {
       constEnum: this.constEnum,
       jsBinding: this.jsBinding,
       noJsBinding: this.noJsBinding,
+      jsModules: this.jsModules,
       dts: this.dts,
       dtsHeader: this.dtsHeader,
       noDtsHeader: this.noDtsHeader,
@@ -233,6 +238,10 @@ export interface BuildOptions {
    * Whether to disable the generation JS binding file. Only works with `--platform` flag.
    */
   noJsBinding?: boolean
+  /**
+   * Whether to generate JS binding file for each module.
+   */
+  jsModules?: boolean
   /**
    * Path and filename of generated type def file. Relative to `--output-dir`
    */
