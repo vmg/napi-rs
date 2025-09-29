@@ -17,25 +17,31 @@ ${idents
 }
 
 export function createCjsBindingModule(
-  namespace: string,
-  indexPackageName: string,
+  namespace: string | undefined,
   idents: string[],
 ): string {
-  return `${bindingHeader}
-const { createRequire } = require('node:module')
-require = createRequire(__filename)
+  if (namespace === undefined) {
+    return `${bindingHeader}
+const nativeBinding = require('./_nativeBinding')
+${idents
+  .map((ident) => `module.exports.${ident} = nativeBinding.${ident}`)
+  .join('\n')}
+`
+  }
 
-const nativeBinding = require('./${indexPackageName}')
+  return `${bindingHeader}
+const nativeBinding = require('./_nativeBinding')
 module.exports = nativeBinding.${namespace}
 ${idents
-      .map((ident) => `module.exports.${ident} = nativeBinding.${namespace}.${ident}`)
-      .join('\n')}
+  .map(
+    (ident) => `module.exports.${ident} = nativeBinding.${namespace}.${ident}`,
+  )
+  .join('\n')}
 `
 }
 
 export function createEsmBindingModule(
-  namespace: string,
-  indexPackageName: string,
+  namespace: string | undefined,
   idents: string[],
 ): string {
   return `${bindingHeader}

@@ -749,18 +749,21 @@ class Builder {
 
     // only for cdylib
     if (this.cdyLibName) {
-      const jsBinding = this.options.jsBinding ?? 'index.js'
       if (this.options.jsModules) {
         const idents = await this.generateTypeDefModules()
         for (const [namespace, { exports }] of idents) {
-          const jsOutput = await this.writeJsBinding(exports, namespace === TOP_LEVEL_NAMESPACE ? undefined : namespace)
+          const jsOutput = await this.writeJsBindingModule(exports, namespace === TOP_LEVEL_NAMESPACE ? undefined : namespace)
           if (jsOutput) {
             this.outputs.push(jsOutput)
           }
         }
+        const jsOutputIndex = await this.writeJsBinding([], '_nativeBinding.js')
+        if (jsOutputIndex) {
+          this.outputs.push(jsOutputIndex)
+        }
       } else {
         const idents = await this.generateTypeDef()
-        const jsOutput = await this.writeJsBinding(idents, undefined)
+        const jsOutput = await this.writeJsBinding(idents, this.options.jsBinding ?? 'index.js')
         const wasmBindingsOutput = await this.writeWasiBinding(
           wasmBinaryName,
           idents,
@@ -1015,7 +1018,7 @@ export type TypedArray = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array
       }
     }
 
-    for (const [namespace, { declaration, exports }] of output) {
+    for (const [namespace, { declaration }] of output) {
       const name = namespace === TOP_LEVEL_NAMESPACE ? this.options.dts ?? 'index.d.ts' : `${namespace}.d.ts`
       await this.generateTypeDefFile(join(this.outputDir, name), declaration)
     }
@@ -1023,7 +1026,38 @@ export type TypedArray = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array
     return output;
   }
 
-  private async writeJsBinding(idents: string[], namespace: string | undefined) {
+  private async writeJsBinding(idents: string[], name: string) {
+    if (
+      !this.options.platform ||
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+      this.options.noJsBinding ||
+      (idents.length === 0 && name !== '_nativeBinding.js')
+    ) {
+      return
+    }
+
+    const createBinding = this.options.esm ? createEsmBinding : createCjsBinding
+    const binding = createBinding(
+      this.config.binaryName,
+      this.config.packageName,
+      idents,
+      // in npm preversion hook
+      process.env.npm_new_version ?? this.config.packageJson.version,
+    )
+
+    try {
+      const dest = join(this.outputDir, name)
+      debug('Writing js binding to:')
+      debug('  %i', dest)
+      await writeFileAsync(dest, binding, 'utf-8')
+      return { kind: 'js', path: dest } satisfies Output
+    } catch (e) {
+      throw new Error('Failed to write js binding file', { cause: e })
+    }
+  }
+
+
+  private async writeJsBindingModule(idents: string[], namespace: string | undefined) {
     if (
       !this.options.platform ||
       // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
@@ -1033,30 +1067,19 @@ export type TypedArray = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array
       return
     }
 
-    let name: string
-    let binding: string
 
-    if (namespace === undefined) {
-      const createBinding = this.options.esm ? createEsmBinding : createCjsBinding
+    const createBinding = this.options.esm
+      ? createEsmBindingModule
+      : createCjsBindingModule
 
-      name = this.options.jsBinding ?? 'index.js'
-      binding = createBinding(
-        this.config.binaryName,
-        this.config.packageName,
-        idents,
-        // in npm preversion hook
-        process.env.npm_new_version ?? this.config.packageJson.version,
-      )
-    } else {
-      const createBinding = this.options.esm ? createEsmBindingModule : createCjsBindingModule
+    const name = namespace
+      ? `${namespace}.js`
+      : (this.options.jsBinding ?? 'index.js')
 
-      name = `${namespace.replaceAll('_', '-')}.js`
-      binding = createBinding(
-        namespace,
-        this.options.jsBinding ?? 'index.js',
-        idents,
-      )
-    }
+    const binding = createBinding(
+      namespace,
+      idents,
+    )
 
     try {
       const dest = join(this.outputDir, name)
