@@ -45,7 +45,6 @@ import {
   createWasiBrowserWorkerBinding,
   WASI_WORKER_TEMPLATE,
 } from './templates/wasi-worker-template.js'
-import { bool } from '@emnapi/runtime'
 
 const debug = debugFactory('build')
 const require = createRequire(import.meta.url)
