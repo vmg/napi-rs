@@ -1,8 +1,6 @@
 {
   "name": "@vmg-anysphere/napi-rs-cli",
-  "version": "3.2.0-modules.2",
-  "name": "@vmg-anysphere/napi-rs/cli",
-  "version": "3.2.0-modules.0",
+  "version": "3.2.0-modules.3",
   "description": "Cli tools for napi-rs",
   "author": "LongYinan <lynweklm@gmail.com>",
   "homepage": "https://github.com/napi-rs/napi-rs",
